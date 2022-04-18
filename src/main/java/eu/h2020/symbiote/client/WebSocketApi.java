@@ -57,7 +57,7 @@ public class WebSocketApi {
     public static String UNSUBSCRIBE_COMMAND = "UNSUBSCRIBE";
 
     public String interWorkingInterface = ""; //required
-    public String coreUrl               = "https://symbiote-core.intracom-telecom.com";
+    public String coreUrl               = "<FILL ME>";
     public String platformID            = "";//required
     public String userName              = "xxx";
     public String password              = "xxx";

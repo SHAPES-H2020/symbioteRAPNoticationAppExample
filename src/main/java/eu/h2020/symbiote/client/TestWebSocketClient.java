@@ -48,14 +48,14 @@ public class TestWebSocketClient {
          * The URL of the L2 Cloud platform
          * where the resource is registered.
          */
-        String interWorkingInterface = "https://symbiote-cloud.intracom-telecom.com";
+        String interWorkingInterface = "<FILL ME>";
 
         /*
          * The name of the L2 Cloud platform
          * where the resource is registered.
          */
 
-        String platformID  = "l2-icom-platform";
+        String platformID  = "<FILL ME>";
 
         /*
          * Insert your Service Owner credentials,as defined in the registration
