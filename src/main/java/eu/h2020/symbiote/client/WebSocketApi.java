@@ -1,25 +1,21 @@
 package eu.h2020.symbiote.client;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import eu.h2020.symbiote.client.interfaces.CRAMClient;
-import eu.h2020.symbiote.client.interfaces.PRClient;
 import eu.h2020.symbiote.client.interfaces.RAPClient;
 import eu.h2020.symbiote.client.interfaces.RHClient;
-
+import eu.h2020.symbiote.client.interfaces.SearchClient;
 import eu.h2020.symbiote.cloud.model.internal.CloudResource;
-import eu.h2020.symbiote.cloud.model.internal.FederatedResource;
-import eu.h2020.symbiote.cloud.model.internal.FederationSearchResult;
-import eu.h2020.symbiote.cloud.model.internal.PlatformRegistryQuery;
 import eu.h2020.symbiote.core.internal.cram.ResourceUrlsResponse;
 import eu.h2020.symbiote.model.cim.Observation;
 import org.json.JSONArray;
 import org.json.JSONObject;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.http.*;
+import org.springframework.web.client.RestTemplate;
 
 import javax.websocket.*;
 import java.io.IOException;
+import java.net.URI;
 import java.sql.Timestamp;
 import java.util.*;
 
@@ -31,9 +27,7 @@ import static eu.h2020.symbiote.client.AbstractSymbIoTeClientFactory.getFactory;
  * String coreUrl
  * String interworkingInterface
  */
-/*
- * Version 1.0
- */
+
 
 public class WebSocketApi {
 
@@ -44,6 +38,12 @@ public class WebSocketApi {
     public static String INVALID_PLATFORM_ID  = " ERROR: INVALID PLATFORM ID ";
 
     public static String ERROR_MESSAGE = NO_ERROR;
+
+    public static String GET_DEVICE_ID_URL = "http://146.124.106.187:8082/symbiote/resource/getdeviceid";
+    public static String ASAPA_LOGIN_URL   = "https://kubernetes.pasiphae.eu/shapes/asapa/auth/login";
+
+    public static String KEEP_ALIVE_MESSAGE = "000";
+    public static long KEEP_ALIVE_MESSAGE_PERIOD = 30000;
 
     /*
      * TEST CASES:
@@ -57,35 +57,34 @@ public class WebSocketApi {
     public static String UNSUBSCRIBE_COMMAND = "UNSUBSCRIBE";
 
     public String interWorkingInterface = ""; //required
-    public String coreUrl               = "<FILL ME>";
+    public String coreUrl               = "https://symbiote-core.intracom-telecom.com";
     public String platformID            = "";//required
     public String userName              = "xxx";
     public String password              = "xxx";
+    public String email                 = "";
 
     public Session session = null;
+
+    public List<String> resourceIdList = new ArrayList<String>();
+
 
     public WebSocketApi(String platformID,String interWorkingInterface ){
       this.platformID = platformID;
       this.interWorkingInterface = interWorkingInterface;
     }//end
 //------------------------------------------------------------------------------------------
-
-public WebSocketApi(String platformID,String interWorkingInterface,String userName,String password){
-    this.platformID = platformID;
-    this.interWorkingInterface = interWorkingInterface;
-    this.userName   = userName;
-    this.password   = password;
+    public WebSocketApi(String platformID, String interWorkingInterface, String email, String password ){
+     this.platformID = platformID;
+     this.interWorkingInterface = interWorkingInterface;
+     this.password  = password;
+     this.email     = email;
 }//end
 //------------------------------------------------------------------------------------------
-    public void setCoreAddress(String coreUrl){
+     public void setCoreAddress(String coreUrl,String userName,String password){
         this.coreUrl    = coreUrl;
-
-    }//end
-//------------------------------------------------------------------------------------------
-    public void setCredentials(String userName,String password){
         this.userName   = userName;
         this.password   = password;
-    }//end
+     }//end
 //--------------------------------------------------------------------------------------
     public String getWebSocketURL() throws Exception{
         String rapWebSocketUrl = "";
@@ -119,6 +118,49 @@ public void closeSession() {
         e.printStackTrace();
     }
 }//end
+//------------------------------------------------------------------------------------------
+    public static boolean checkIfIsObservationMessage(String message){
+        if(message.contains("BAD_REQUEST")) {
+            return false;
+        }
+        boolean res = checkIfIsKeepAliveMessage(message);
+        if(res == true)
+            return false;
+
+        return true;
+    }//end
+//--------------------------------------------------------------------------------------
+    public static boolean checkIfIsKeepAliveMessage(String message){
+
+        System.out.println("checkIfIsKeepAliveMessage");//
+        ObjectMapper objectMapper = new ObjectMapper();
+        try {
+            Payload payload   = objectMapper.readValue(message, WebSocketObservation.class).PayloadObject;
+            String resultTime = payload.getResultTime();
+
+            System.out.println("resultTime = " + resultTime);
+            if(resultTime.equals(KEEP_ALIVE_MESSAGE)) {
+                System.out.println("is keep alive message");
+                return true;
+            }
+            else {
+                System.out.println("is not keep alive message");
+                return false;
+            }
+        }catch(Exception ex){
+            System.out.println("checkIfIsKeepAliveMessage exception");
+            return false;
+        }
+
+    }//end
+//------------------------------------------------------------------------------------------
+    public void sendKeepAliveMessage() throws IOException{
+        try {
+            sendMessageToRAP(KEEP_ALIVE_MESSAGE);
+        }catch(Exception ex){
+            System.out.println("Failed to send keep alive message");
+        }
+    }//end
 //------------------------------------------------------------------------------------------
 public void sendMessageToRAP(String message) throws IOException {
     session.getBasicRemote().sendText(message);
@@ -169,18 +211,224 @@ public static String getMessage(String command,String resourceId) throws Excepti
     message = rootJsonObject.toString();
     return message;
 }//end
-
 //--------------------------------------------------------------------------------------
 public  String getErrorMessage(){
    return ERROR_MESSAGE;
 }//end
 //--------------------------------------------------------------------------------------
-    public  String getResourceIdFromInternalID(String internalID){
+public String getAsapaToken(String email,String password){
+         
+    RestTemplate restTemplate = new RestTemplate();
+
+    /*
+     * Build headers.
+     */
+    HttpHeaders httpHeaders   = new HttpHeaders();
+    httpHeaders.setContentType(MediaType.APPLICATION_JSON);
+    httpHeaders.add("X-Shapes-Key", "7Msbb3w^SjVG%j");
+
+    /*
+     * Build body.
+     */
+
+    Map<String,String> map = new HashMap<>();
+    map.put("email",email);
+    map.put("password",password);
+
+    HttpEntity<Map<String,String>> entity = new HttpEntity<>(map,httpHeaders);
+    ResponseEntity<?> responseEntity      = restTemplate.postForEntity(ASAPA_LOGIN_URL,entity,String.class);
+    HttpStatus httpStatus                 = responseEntity.getStatusCode();
+
+    String body              = (String) responseEntity.getBody();
+    JSONObject jsonObject    = new JSONObject(body);
+    JSONArray itemsJsonArray = jsonObject.getJSONArray("items");
+
+    /*
+     * Get the token.
+     */
+
+    String token = (String) itemsJsonArray.getJSONObject(0).get("token");
+    return token;
+}//end
+//--------------------------------------------------------------------------------------
+public  String getResourceIdFromInternalID(String internalID){
+
+    /*
+     * Get token.
+     */
+
+    String token = "";
+
+    try {
+        token = getAsapaToken(email, password);
+    }catch(Exception ex){
+        ERROR_MESSAGE = "Failed to get token from ASAPA";
+        return  null;
+    }
+
+    if(token == null){
+        ERROR_MESSAGE = "Failed to get token from ASAPA";
+        return null;
+    }
+
+    RestTemplate restTemplate = new RestTemplate();
+
+    /*
+     * Build headers.
+     */
+
+    HttpHeaders httpHeaders   = new HttpHeaders();
+    httpHeaders.setContentType(MediaType.APPLICATION_JSON);
+
+    /*
+     * Build Body.
+     */
+
+    Map<String,String> map = new HashMap<>();
+    map.put("asapatoken",token);
+    map.put("resourceinternalid",internalID);
+    map.put("resourceplatformid",platformID);
+
+    HttpEntity<Map<String,String>> entity = new HttpEntity<>(map,httpHeaders);
+    ResponseEntity<?>  responseEntity     = restTemplate.postForEntity(GET_DEVICE_ID_URL,entity,String.class);
+    HttpStatus httpStatus = responseEntity.getStatusCode();
+
+    if(httpStatus.value() == 200) {
+        String body = (String) responseEntity.getBody();
+        JSONObject jsonObject = new JSONObject(body);
+        String resourceId     = (String)jsonObject.get("result");
+        return resourceId;
+    }else {
+        ERROR_MESSAGE = "Response code: " + httpStatus.value();
+        return null;
+    }
+
+}//end
+//------------------------------------------------------------------------------------------
+    public void addResourceID(String resourceID){
+        /*
+         * Check first if the resourceID
+         * is already stored.
+         */
+        for (String id : resourceIdList) {
+            if(id.equals(resourceID)){
+                System.out.println("resourceID " + resourceID + " already is stored");
+                return;
+            }
+        }
+        resourceIdList.add(resourceID);
+}//end
+//---------------------------------------------------------------------------------------
+public void removeResourceID(String resourceID){
+    /*
+     * Check first if the resourceID
+     * is already stored.
+     */
+    for (String id : resourceIdList) {
+        if(id.equals(resourceID)){
+            resourceIdList.remove(resourceID);
+            return;
+        }
+    }
+}//end
+//------------------------------------------------------------------------------------------
+ public List<String> getListOfResourceIds(){
+   return resourceIdList;
+}//end
+//--------------------------------------------------------------------------------------
+public  String getResourceIdFromInternalID(String internalID,String token){
+
+    RestTemplate restTemplate = new RestTemplate();
+
+    /*
+     * Build headers.
+     */
+
+    HttpHeaders httpHeaders   = new HttpHeaders();
+    httpHeaders.setContentType(MediaType.APPLICATION_JSON);
+
+    /*
+     * Build Body.
+     */
+
+    Map<String,String> map = new HashMap<>();
+    map.put("asapatoken",token);
+    map.put("resourceinternalid",internalID);
+    map.put("resourceplatformid",platformID);
+
+    HttpEntity<Map<String,String>> entity = new HttpEntity<>(map,httpHeaders);
+    ResponseEntity<?>  responseEntity     = restTemplate.postForEntity(GET_DEVICE_ID_URL,entity,String.class);
+    HttpStatus httpStatus = responseEntity.getStatusCode();
+
+    if(httpStatus.value() == 200) {
+        String body = (String) responseEntity.getBody();
+        JSONObject jsonObject = new JSONObject(body);
+        String resourceId     = (String)jsonObject.get("result");
+        return resourceId;
+    }else {
+        ERROR_MESSAGE = "Response code: " + httpStatus.value();
+        return null;
+    }
+
+}//end
+//--------------------------------------------------------------------------------------
+public  boolean restartSession(WebSocketContainer container,TestWebSocketClient.LocalClientSocket clientSocket) {
+
+    System.out.println("Restarting session");
+
+    String endpointURI = null;
+
+    try {
+        /*
+         * Create now new session.
+         * Connect again to RAP.
+         */
+        session = container.connectToServer(clientSocket, URI.create(getWebSocketURL()));
+        setSession(session);
+    } catch (Exception e) {
+        e.printStackTrace();
+        System.out.println(e.getMessage());
+        return false;
+    }
+
+    if (session != null) {
+
+        /*
+         * Create the subscribe resource
+         * request json message.
+         */
+
+        for (String resourceId:resourceIdList) {
+            String message = null;
+            try {
+                message = getMessage(SUBSCRIBE_COMMAND, resourceId);
+            } catch (Exception ex) {
+                System.out.println(ex.getMessage().toString());
+                return false;
+            }
+
+            /*
+             * Send the subscribe command
+             * to the remote RAP microservice.
+             */
+            try {
+                sendMessageToRAP(message);
+            } catch (Exception ex) {
+                System.out.println("Failed to send message to RAP");
+                return false;
+            }
+        }
+    }else
+        return false;
+
+    return true;
+}//end
+//--------------------------------------------------------------------------------------
+    public  String getResourceIdFromInternalID(String internalID,boolean checkIfIsObserved){
         String coreAddress      =  this.coreUrl;
         String keystorePath     = "testKeystore" +  System.currentTimeMillis();
         String keystorePassword = "testKeystore";
         String exampleHomePlatformIdentifier = "SymbIoTe_Core_AAM";
-        boolean checkIfIsObserved = true;//false;
 
         Set<String> platformIds = new HashSet<>(Collections.singletonList(exampleHomePlatformIdentifier));
         AbstractSymbIoTeClientFactory.Type type = AbstractSymbIoTeClientFactory.Type.FEIGN;
@@ -287,13 +535,7 @@ public  String getErrorMessage(){
             Observation observation = null;
 
             if(checkIfIsObserved == true) {
-                try {
-                    observation = rapClient.getLatestObservation(resourceUrl, true, platformIds);//check the correct value of platformIds
-                }catch(Exception ex){
-                    System.out.println("The resource cannot be observed");
-                    ERROR_MESSAGE = "The resource cannot be observed,exception: " + ex.getMessage();
-                    return null;
-                }
+                observation = rapClient.getLatestObservation(resourceUrl, true, platformIds);//check the correct value of platformIds
                 //System.out.println("Latest Observation = " + observation.toString());
             }
 
@@ -306,106 +548,6 @@ public  String getErrorMessage(){
         return resourceId;
     }//end
 //---------------------------------------------------------------------------------------------
-    public String getResourceIdFromPlatformRegistry(String internalID,String coreUrl,String federationId) {
-        String coreAddress      = this.coreUrl;
 
-        String keystorePath     = "searchL2keystore"+System.currentTimeMillis()+".jks";
-        String keystorePassword = "test";
-        String exampleHomePlatformIdentifier = this.platformID;
-
-
-        AbstractSymbIoTeClientFactory.Type type = AbstractSymbIoTeClientFactory.Type.FEIGN;
-
-        /*
-         * Get the configuration
-         */
-        AbstractSymbIoTeClientFactory.Config config = new AbstractSymbIoTeClientFactory.Config(coreAddress, keystorePath, keystorePassword, type);
-
-        // Get the factory
-        AbstractSymbIoTeClientFactory factory;
-
-        try {
-            factory = getFactory(config);
-            Set<AbstractSymbIoTeClientFactory.HomePlatformCredentials> platformCredentials = new HashSet<>();
-
-            /*
-             * User credentials
-             */
-
-            String username = this.userName;
-            String password = this.password;
-            String clientId = "webSocket";
-            AbstractSymbIoTeClientFactory.HomePlatformCredentials exampleHomePlatformCredentials = new AbstractSymbIoTeClientFactory.HomePlatformCredentials(
-                    exampleHomePlatformIdentifier,
-                    username,
-                    password,
-                    clientId);
-            platformCredentials.add(exampleHomePlatformCredentials);
-            factory.initializeInHomePlatforms(platformCredentials);
-        } catch ( Exception e) {
-            e.printStackTrace();
-            JSONObject parameters = new JSONObject();
-            parameters.put("message","WRONG CREDENTIALS OR PLATFORM NAME");
-            return null;
-        }
-
-        System.out.println("ok");
-
-        try {
-            CRAMClient cramClient   = factory.getCramClient();
-            RAPClient rapClient     = factory.getRapClient();
-            PRClient rpcClient      = factory.getPRClient(this.platformID);
-            Set<String> platformIds = new HashSet<>(Collections.singletonList(this.platformID));
-
-            /*
-             * Get the necessary component clients
-             */
-            PRClient searchClient = factory.getPRClient(this.platformID);
-
-            /*
-             * Create the request
-             * Here, we specify just one search criteria, which is the platform id. You can add more criteria, such as
-             * platform name, location, etc. You can check what the PlatformRegistryQuery.Builder supports.
-             * If you specify no criteria, all the L2 resources will be returned
-             */
-
-            PlatformRegistryQuery registryQuery = new PlatformRegistryQuery.Builder()//.resourceType(resourceType)//.maxDistance(100.0)//.resourceTrust(100.0)
-                    .build();
-
-           // System.out.println("Searching the Platform Registry of platform: " + this.platformId);
-            FederationSearchResult result = searchClient.search(registryQuery, false, platformIds);
-            int numberOfResources = result.getResources().size();
-            JSONArray jsonArray   = new JSONArray();
-
-            for(int i = 0; i < result.getResources().size(); i++){
-                FederatedResource federatedResource = result.getResources().get(i);
-                String internalIdFound    = federatedResource.getCloudResource().getInternalId();
-
-                if(internalIdFound!=null){
-                    /*
-                     * Check if is the one
-                     * we are looking for.
-                     */
-
-                    if(internalIdFound.equals(internalID)){
-                        if(federatedResource.getCloudResource().getResource()!= null)
-                        return federatedResource.getCloudResource().getResource().getId();
-
-                    }
-
-                }
-
-            }
-
-           }
-        catch(Exception ex){
-            return null;
-        }
-
-      return null;
-
-
-        //return new ResponseEntity<>("Found " + Integer.toString(numberOfResources) , new HttpHeaders(), HttpStatus.OK);
-    }//end
 
 }//end of class

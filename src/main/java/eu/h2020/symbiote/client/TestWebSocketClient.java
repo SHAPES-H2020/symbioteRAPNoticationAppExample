@@ -1,15 +1,33 @@
 package eu.h2020.symbiote.client;
 
-
+import com.fasterxml.jackson.databind.ObjectMapper;
+import eu.h2020.symbiote.client.interfaces.CRAMClient;
+import eu.h2020.symbiote.client.interfaces.RAPClient;
+import eu.h2020.symbiote.client.interfaces.RHClient;
+import eu.h2020.symbiote.cloud.model.internal.CloudResource;
+import eu.h2020.symbiote.core.internal.cram.ResourceUrlsResponse;
+import eu.h2020.symbiote.model.cim.Observation;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import org.springframework.http.*;
+import org.springframework.web.client.RestTemplate;
 
 import javax.websocket.*;
 import java.io.IOException;
 import java.net.URI;
+import java.sql.Timestamp;
+import java.text.SimpleDateFormat;
+import java.util.*;
+
+import static eu.h2020.symbiote.client.AbstractSymbIoTeClientFactory.getFactory;
 
 
-
+/*
+ * DONT FORGET TO ADD THE VM PROXY SETTINGS
+ * IN EDIT CONFIGURATIONS !!!!!!!!!!!
+ *
+ */
 public class TestWebSocketClient {
-    /////////////////////////////https://www.javatips.net/api/javax.websocket.websocketcontainer///////////////////////////////////////////
 
     /*
      * Parameters:
@@ -26,53 +44,62 @@ public class TestWebSocketClient {
      */
 
 
-    /*
-     * TEST CASES:
-     * 1) WRONG PLATFORM ID: ERROR MESSAGE: "Exception 3: null rhClient is null, check platform id,"
-     * 2) WRONG INTERNAL ID: ERROR MESSAGE: ERROR: CLOUD RESOURCE FOUND NULL. Check the validity of internal id: 8999671. Is registered ?
-     * 3) WRONG INTERWORKING INTERFACE: ERROR MESSAGE:Failed to create session for web socket end point: wss://xxxxxxx/rap/notification
-     */
+
+    public static KeepAliveThread keepAliveThread;
+    public static boolean shouldSessionRestart = false;
+
 
     public static void main(String[] args) {
 
         /*
-         * Fill the next parameters.
+         * The following parameters are the
+         * parameters of notification request message.
          */
 
         /*
-         * The id of the resource we want to observe.
+         * TODO Fill interWorkingInterface,
+         * internalID and platformID.
          */
-        String internalID            = "899967";
+
+        String interWorkingInterface = "https://xxxxxxxxx"; //required
+        String internalID            = "xxxxxx";//required
+        String platformID            = "xxxx";//required
 
         /*
-         * The URL of the L2 Cloud platform
-         * where the resource is registered.
+         * The following parameters are
+         * the credentials of the data consumer.
          */
-        String interWorkingInterface = "<FILL ME>";
 
         /*
-         * The name of the L2 Cloud platform
-         * where the resource is registered.
+         * TODO Fill email and passsword
          */
 
-        String platformID  = "<FILL ME>";
+        String email                 = "xxxxxx";
+        String password              = "xxxxxxxxx";
+
+        LocalClientSocket clientSocket = new LocalClientSocket();
+        WebSocketContainer container   = ContainerProvider.getWebSocketContainer();
 
         /*
-         * Insert your Service Owner credentials,as defined in the registration
-         * at https://symbiote-core.intracom-telecom.com/administration Symbiote platform.
+         * If platformID is never used in the past
+         * create new webSocketApi object.
+         * One webSocketApi per platformID.
          */
 
-        String userName = "xxx";
+        WebSocketApi webSocketApi = new WebSocketApi(platformID,interWorkingInterface,email,password);
 
-        String password = "xxx";
-
-        WebSocketApi webSocketApi = new WebSocketApi(platformID,interWorkingInterface);
-
-        webSocketApi.setCredentials(userName,password);
+        keepAliveThread = new KeepAliveThread();
+        keepAliveThread.startThread();
 
         /*
-         * Get the websocket uri
+         * Keep the webSocketApi to a list of WebSocketApi objects.
+         * No need to open again a new web socket session for the same platform id.
          */
+
+         /*
+          * Get the websocket uri
+          * of platformID's RAP
+          */
 
         String endpointURI = null;
 
@@ -88,7 +115,8 @@ public class TestWebSocketClient {
 
         /*
          * Get the resource id
-         * from the internalID
+         * of the resource to be observed
+         * from the internalID.
          */
 
         String resourceId = webSocketApi.getResourceIdFromInternalID(internalID);
@@ -101,26 +129,22 @@ public class TestWebSocketClient {
         }
 
 
+
         /*
          * Open a web socket to the
          * remote RAP of platformID.
          */
 
-        LocalClientSocket clientSocket = new LocalClientSocket();
-
         try {
-            WebSocketContainer container = ContainerProvider.getWebSocketContainer();
             session = container.connectToServer(clientSocket, URI.create(endpointURI));
             webSocketApi.setSession(session);
-
 
             if (session != null) {
 
                 /*
-                 * Create the subscribe resource
+                 * Create the subscribe to resource
                  * request json message.
                  */
-
                 String message = null;
                 try {
                     message = webSocketApi.getMessage(webSocketApi.SUBSCRIBE_COMMAND, resourceId);
@@ -140,17 +164,38 @@ public class TestWebSocketClient {
                     return;
                 }
 
+                /*
+                 * Update the list of
+                 * subscribed resource ids.
+                 */
+                webSocketApi.addResourceID(resourceId);
 
                 /*
                  * Wait here some time
                  * before unsubscribe the resource.
                  */
+                SimpleDateFormat formatter = new SimpleDateFormat("dd/MM/yyyy HH:mm:ss");
+                Date date = new Date();
+                System.out.println("Test started at: " + formatter.format(date));
 
                 long start = System.currentTimeMillis();
-                long duration = 10000; //10 seconds
+                long duration = 60 * 1000; //60 seconds
+
+                /*
+                 * Add the webSocketApi to
+                 * keepAlive thread
+                 */
+                keepAliveThread.addWebSocketApi(webSocketApi);
 
                 while (true){
                     long now = System.currentTimeMillis();
+
+                    if(shouldSessionRestart == true){
+                        System.out.println("##### shouldSessionRestart is true ####");
+                        webSocketApi.restartSession(container,clientSocket);
+                        shouldSessionRestart = false;
+                    }
+
                     if (now - start > duration)
                         break;
                 }
@@ -162,7 +207,8 @@ public class TestWebSocketClient {
 
 
                 /*
-                 * Build the unsubscribe request json message.
+                 * Build the unsubscribe
+                 * request json message.
                  */
 
                 try {
@@ -183,6 +229,13 @@ public class TestWebSocketClient {
                     return;
                 }
 
+                /*
+                 * Remove the resource id
+                 * from the stored list of resource ids.
+                 */
+
+                webSocketApi.removeResourceID(resourceId);
+                keepAliveThread.stopThread();
                 System.out.println("Closing session...");
                 webSocketApi.closeSession();
 
@@ -215,20 +268,57 @@ public class TestWebSocketClient {
             System.out.println("LocalClientSocket session.getOpenSessions().size() " + session.getOpenSessions().size());
             System.out.println("LocalClientSocket session.getMaxIdleTimeout() " + session.getMaxIdleTimeout());
         }//end
-        //--------------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------------
         @OnMessage
         public void onWebSocketText(String message) throws IOException, EncodeException {
             messageEchoed = message;
             spin = false;
-            System.out.println("Received message from remote RAP web socket =  " + message);
+
+            boolean isObservationMessage = WebSocketApi.checkIfIsObservationMessage(message);
+
+            if(isObservationMessage == false) {
+                System.out.println("Is not observation message, ignore it ");
+                return;
+            }
+            else
+                System.out.println("Is observation message");
+
+            System.out.println("Received Observation message from remote RAP web socket =  " + message);
+
+            ObjectMapper objectMapper = new ObjectMapper();
+            try {
+                Payload payload     = objectMapper.readValue(message,WebSocketObservation.class).PayloadObject;
+                String resultTime   = payload.getResultTime();
+                String samplingTime = payload.getSamplingTime();
+                String resourceId   = payload.getResourceId();
+                float  longitude    = payload.getLocation().getLongitude();
+                float  latitude     = payload.getLocation().getLatitude();
+
+                ArrayList<Object> descriptionList  = payload.getLocation().getDescription();
+                ArrayList<ObsValue> obsList        = payload.getObsValues();
+
+                for (int i  = 0; i <  obsList.size(); i++ ){
+                    String observedValue    = obsList.get(i).getValue();
+                    String observedSymbol   = obsList.get(i).getUom().getSymbol();
+                    System.out.println("Property name: " + obsList.get(i).getObsProperty().getName() +  " Property description " + obsList.get(i).getObsProperty().getDescription() + " has value : " + observedValue + " " + observedSymbol);
+                }
+            } catch (IOException e) {
+
+                e.printStackTrace();
+            }
         }//end
-        //--------------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------------
         @OnClose
         public void onWebSocketClose(CloseReason reason) {
             System.out.println("onWebSocketClose");
             System.out.println("Closing connection with remote RAP web socket,reason =  " + reason);
+            SimpleDateFormat formatter = new SimpleDateFormat("dd/MM/yyyy HH:mm:ss");
+            Date date = new Date();
+            System.out.println("Closed at : " + formatter.format(date));
+
+            shouldSessionRestart = true;
         }//end
-        //--------------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------------
         @OnError
         public void onWebSocketError(Throwable cause) {
             System.out.println("onWebSocketError");
@@ -236,10 +326,7 @@ public class TestWebSocketClient {
             if(cause !=null)
              System.out.println("onWebSocketError cause" + cause.getMessage());
         }//end
+}//end of class
 
-
-    }//end of class
-
-    ////////////////////////////////////////
 
 }//end of class
